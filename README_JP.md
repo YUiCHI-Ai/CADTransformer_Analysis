@@ -111,6 +111,173 @@ mkdir pretrained_models
 CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 train_cad_ddp.py --data_root /PATH/TO/PROJECT_DIR/data/FloorPlanCAD --pretrained_model /PATH/TO/PROJECT_DIR/pretrained_models/hrnetv2_w48_imagenet_pretrained.pth --load_ckpt /PATH/TO/PROJECT_DIR/logs/[log_dir]/best_model.pth --test_only
 ```
 
+## 高度な使用方法
+
+### 学習を行わない場合の使用方法
+
+CADTransformerを学習せずに使用する場合、以下の手順に従ってください：
+
+1. **事前学習済みモデルの入手**:
+   - 公式リポジトリでは学習済みのCADTransformerモデルは提供されていないため、以下のいずれかの方法でモデルを入手する必要があります：
+     - 他の研究者や組織が公開している学習済みモデルを使用する
+     - 論文著者に直接連絡して学習済みモデルを要求する
+     - 少量のデータで短時間の学習を行い、簡易的なモデルを作成する
+
+2. **モデルの読み込みと推論**:
+   学習済みモデルを入手した場合、以下のコマンドで推論を実行できます：
+   ```
+   CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 train_cad_ddp.py --data_root /PATH/TO/PROJECT_DIR/data/FloorPlanCAD --pretrained_model /PATH/TO/PROJECT_DIR/pretrained_models/hrnetv2_w48_imagenet_pretrained.pth --load_ckpt /PATH/TO/TRAINED_MODEL.pth --test_only
+   ```
+
+3. **単一の図面に対する推論**:
+   特定のCAD図面に対して推論を行いたい場合は、以下のようなPythonスクリプトを作成して実行できます：
+   ```python
+   import torch
+   from models.model import CADTransformer
+   from config import config, update_config
+   from PIL import Image
+   import torchvision.transforms as T
+   import numpy as np
+   import argparse
+
+   # コマンドライン引数の設定
+   parser = argparse.ArgumentParser()
+   parser.add_argument('--cfg', type=str, default="config/hrnet48.yaml")
+   parser.add_argument('--model_path', type=str, required=True, help='学習済みモデルのパス')
+   parser.add_argument('--image_path', type=str, required=True, help='推論するCAD図面のパス')
+   parser.add_argument('--output_path', type=str, default='output.png', help='出力画像のパス')
+   args = parser.parse_args()
+
+   # 設定の読み込み
+   cfg = update_config(config, args)
+   
+   # モデルの初期化と学習済みの重みの読み込み
+   model = CADTransformer(cfg)
+   checkpoint = torch.load(args.model_path, map_location=torch.device("cpu"))
+   model.load_state_dict(checkpoint['model_state_dict'])
+   model.cuda()
+   model.eval()
+
+   # 画像の前処理
+   transform = T.Compose([
+       T.ToTensor(),
+       T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+   ])
+   
+   image = Image.open(args.image_path).convert("RGB")
+   image = image.resize((cfg.img_size, cfg.img_size))
+   image_tensor = transform(image).unsqueeze(0).cuda()
+   
+   # 推論の実行
+   with torch.no_grad():
+       # ここでは簡略化のため、実際の入力形式に合わせて適宜調整が必要
+       # 実際のモデル入力には座標情報なども必要
+       output = model(image_tensor, coordinates, rgb_info, nns)
+       predictions = output.argmax(dim=1)
+   
+   # 結果の可視化と保存
+   # ...（結果の可視化コード）
+   ```
+
+   このスクリプトを実行するには、実際のCAD図面データに合わせて座標情報などの入力を適切に準備する必要があります。
+
+### CAD図面から赤の手書き修正部分を識別する方法
+
+CADTransformerは元々CAD図面内のシンボルを検出・分類するためのモデルですが、赤の手書き修正部分を識別するためには以下のアプローチが考えられます：
+
+1. **前処理による赤色抽出**:
+   CAD図面から赤色の部分を抽出するために、色空間フィルタリングを使用します：
+   ```python
+   import cv2
+   import numpy as np
+   
+   def extract_red_markings(image_path, output_path=None):
+       # 画像の読み込み
+       image = cv2.imread(image_path)
+       
+       # RGB色空間からHSV色空間に変換
+       hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+       
+       # 赤色の範囲を定義（HSV色空間）
+       # 赤色は色相環の両端にあるため、2つの範囲を定義
+       lower_red1 = np.array([0, 100, 100])
+       upper_red1 = np.array([10, 255, 255])
+       lower_red2 = np.array([160, 100, 100])
+       upper_red2 = np.array([180, 255, 255])
+       
+       # 赤色の範囲内のピクセルをマスク
+       mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+       mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+       red_mask = mask1 + mask2
+       
+       # 元の画像に赤色マスクを適用
+       red_markings = cv2.bitwise_and(image, image, mask=red_mask)
+       
+       # 結果を保存（オプション）
+       if output_path:
+           cv2.imwrite(output_path, red_markings)
+       
+       return red_markings, red_mask
+   ```
+
+2. **赤色修正部分の分析**:
+   抽出した赤色部分を分析して、修正内容を理解します：
+   ```python
+   def analyze_red_markings(image_path, model_path):
+       # 赤色修正部分の抽出
+       _, red_mask = extract_red_markings(image_path)
+       
+       # 元の画像を読み込み
+       original_image = cv2.imread(image_path)
+       
+       # 赤色修正部分の周辺領域を抽出（コンテキスト理解のため）
+       kernel = np.ones((15, 15), np.uint8)
+       dilated_mask = cv2.dilate(red_mask, kernel, iterations=1)
+       
+       # 修正部分の周辺領域を含む画像を作成
+       context_area = cv2.bitwise_and(original_image, original_image, mask=dilated_mask)
+       
+       # CADTransformerモデルを使用して修正部分の周辺にあるCAD要素を識別
+       # （ここでは簡略化のため、実際の入力形式に合わせて適宜調整が必要）
+       predictions = predict_with_cadtransformer(context_area, model_path)
+       
+       # 修正部分と識別されたCAD要素の関係を分析
+       # ...
+       
+       return analysis_results
+   ```
+
+3. **統合アプローチ**:
+   CAD図面全体の解析と赤色修正部分の識別を組み合わせます：
+   ```python
+   def process_cad_with_red_markings(image_path, model_path, output_path):
+       # 元の画像を読み込み
+       original_image = cv2.imread(image_path)
+       
+       # 赤色修正部分を抽出
+       red_markings, red_mask = extract_red_markings(image_path)
+       
+       # CADTransformerで図面全体のCAD要素を識別
+       cad_elements = predict_with_cadtransformer(original_image, model_path)
+       
+       # 赤色修正部分と識別されたCAD要素の重なりを分析
+       overlap_analysis = analyze_overlaps(cad_elements, red_mask)
+       
+       # 結果を可視化
+       visualization = visualize_results(original_image, cad_elements, red_markings, overlap_analysis)
+       
+       # 結果を保存
+       cv2.imwrite(output_path, visualization)
+       
+       return {
+           'cad_elements': cad_elements,
+           'red_markings': red_markings,
+           'overlap_analysis': overlap_analysis
+       }
+   ```
+
+このアプローチを使用することで、CAD図面内の赤色の手書き修正部分を識別し、その修正がどのCAD要素に関連しているかを分析することができます。ただし、実際の実装では、CADTransformerモデルの入力形式や出力形式に合わせて適切に調整する必要があります。
+
 ## データ準備
 
 変換済みデータのサンプルがいくつか提供されており、公式FloorPlanCADデータセットからダウンロードしなくてもコードを実行できます。
