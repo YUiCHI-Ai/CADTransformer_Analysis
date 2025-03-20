@@ -14,6 +14,57 @@ CADTransformerは、CAD図面（特に建築の平面図）内のシンボルを
 - **Transformerベースのアーキテクチャ**: 自己注意機構を活用して、シンボル間の関係性を捉えます
 - **HRNetとViTの組み合わせ**: 特徴抽出にHRNetを使用し、Transformerエンコーダとして修正版のViTを使用します
 
+### 識別可能な要素
+
+CADTransformerは、以下の35種類の要素を識別することができます：
+
+#### ドア関連（6種類）
+1. 片開きドア（single door）
+2. 両開きドア（double door）
+3. 引き戸（sliding door）
+4. 折りたたみドア（folding door）
+5. 回転ドア（revolving door）
+6. シャッター（rolling door）
+
+#### 窓関連（4種類）
+7. 窓（window）
+8. 出窓（bay window）
+9. ブラインド窓（blind window）
+10. 開口部記号（opening symbol）
+
+#### 家具関連（14種類）
+11. ソファ（sofa）
+12. ベッド（bed）
+13. 椅子（chair）
+14. テーブル（table）
+15. TVキャビネット（TV cabinet）
+16. ワードローブ（Wardrobe）
+17. キャビネット（cabinet）
+19. シンク（sink）
+22. バス（bath）
+23. 浴槽（bath tub）
+25. 和式トイレ（squat toilet）
+26. 小便器（urinal）
+27. トイレ（toilet）
+
+#### 家電関連（3種類）
+18. ガスコンロ（gas stove）
+20. 冷蔵庫（refrigerator）
+24. 洗濯機（washing machine）
+
+#### 設備関連（2種類）
+29. エレベーター（elevator）
+30. エスカレーター（escalator）
+
+#### その他（6種類）
+21. エアコン（airconditioner）
+28. 階段（stairs）
+31. 列席（row chairs）
+32. 駐車スペース（parking spot）
+33. 壁（wall）
+34. カーテンウォール（curtain wall）
+35. 手すり（railing）
+
 ## インストール方法
 
 `conda`を使用して実行環境をインストールすることを推奨します。以下の依存関係が必要です：
@@ -45,6 +96,20 @@ mkdir pretrained_models
 ```
 
 ダウンロードした事前学習済みHRNetをCADTransformer/pretrained_models/に配置してください。
+
+## 学習済みCADTransformerモデルについて
+
+**注意**: 公式リポジトリでは、CADTransformer自体の学習済みモデルは提供されていません。モデルを使用するには、上記の手順に従って自分でモデルを訓練する必要があります。訓練後は、以下のパスに最良のモデルが保存されます：
+
+```
+/PATH/TO/PROJECT_DIR/logs/[log_dir]/best_model.pth
+```
+
+このモデルは、`--load_ckpt`オプションを使用して読み込むことができます：
+
+```
+CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 train_cad_ddp.py --data_root /PATH/TO/PROJECT_DIR/data/FloorPlanCAD --pretrained_model /PATH/TO/PROJECT_DIR/pretrained_models/hrnetv2_w48_imagenet_pretrained.pth --load_ckpt /PATH/TO/PROJECT_DIR/logs/[log_dir]/best_model.pth --test_only
+```
 
 ## データ準備
 
